@@ -2,6 +2,7 @@ package com
 
 package object pooranpatel {
 
+  // Domain model
   type EventsString = String
   type EventString = String
   type UserId = String
