@@ -12,9 +12,9 @@ import scala.collection.mutable
  */
 class EventDistributor extends Actor with EventConversions {
 
-  val userConnections = mutable.Map.empty[UserId, ActorRef]
+  val userConnections = mutable.Map.empty[UserId, mutable.ListBuffer[ActorRef]]
 
-  val userFollowers = mutable.Map.empty[UserId, mutable.Set[ActorRef]]
+  val userFollowers = mutable.Map.empty[UserId, mutable.Set[UserId]]
 
   val settings = Settings(context.system)
 
@@ -22,7 +22,9 @@ class EventDistributor extends Actor with EventConversions {
     case es: EventsString =>
       val sortedEvents = sortEventsAscending(eventsStringToEvents(es, settings.eventsSeparator, settings.eventFieldsSeparator))
       sortedEvents foreach ( e => handleEvent(e) )
-    case UserClientConnected(id) => userConnections += (id -> sender())
+    case UserClientConnected(id) =>
+      val connections = userConnections.getOrElseUpdate(id, mutable.ListBuffer.empty[ActorRef])
+      sender() +=: connections
   }
 
   private def sortEventsAscending(events: Array[Event]) = events.sortWith(_.sequenceNumber < _.sequenceNumber)
@@ -30,31 +32,74 @@ class EventDistributor extends Actor with EventConversions {
   private def handleEvent(event: Event) = {
     event match {
       case FollowEvent(es, _, followee, follower) => follow(followee, follower, es)
-      case UnFollowEvent(es, _, followee, follower) => unFollow(followee, follower)
-      case BroadCastEvent(es, _) => userConnections.values.foreach(uch => uch ! es)
-      case PrivateMsgEvent(es, _, from, to) => userConnections.get(to).foreach( uch => uch ! es )
-      case StatusUpdateEvent(es, _, from) => userFollowers.get(from).foreach( ucs => ucs.foreach( uc => uc ! es))
+      case UnFollowEvent(es, _, followee, follower) => unfollow(followee, follower)
+      case BroadCastEvent(es, _) => broadCastMessage(es)
+      case PrivateMsgEvent(es, _, from, to) => sendPrivateMessage(from, to, es)
+      case StatusUpdateEvent(es, _, from) => sendUpdates(from, es)
       case _ => // ignore
     }
   }
 
-  private def follow(followee: UserId, follower: UserId, eventsString: EventsString): Unit = {
-    val followers = userFollowers.getOrElseUpdate(followee, mutable.Set.empty[ActorRef])
-    userConnections.get(followee) foreach( uc => uc ! eventsString )
-    userConnections.get(follower) foreach( uc => followers += uc)
+  /**
+   * Add follower to list of followers for given followee and send follow event to followee
+   */
+  private def follow(followee: UserId, follower: UserId, eventString: EventString): Unit = {
+    val followers = userFollowers.getOrElseUpdate(followee, mutable.Set.empty[UserId])
+    followers += follower
+    for {
+      connections <- userConnections.get(followee)
+      uc <- connections
+    } {
+      uc ! eventString
+    }
   }
 
-  private def unFollow(followee: UserId, follower: UserId): Unit = {
+  /**
+   * Remove follower from list of followers for given followee
+   */
+  private def unfollow(followee: UserId, follower: UserId): Unit = {
+    userFollowers.get(followee) foreach (followers => followers -= follower)
+  }
+
+  /**
+   * Broadcast event to all user clients
+   */
+  private def broadCastMessage(eventString: EventString): Unit = {
     for {
-      followers <- userFollowers.get(followee)
-      userConnectionHandler <- userConnections.get(follower)
+      connections <- userConnections.values
+      uc <- connections
     } {
-      followers -= userConnectionHandler
+      uc ! eventString
+    }
+  }
+
+  /**
+   * Send private message event to user client identified by to user id
+   */
+  private def sendPrivateMessage(from: UserId, to: UserId, eventString: EventString): Unit = {
+    for {
+      connections <- userConnections.get(to)
+      uc <- connections
+    } {
+      uc ! eventString
+    }
+  }
+
+  /**
+   * Send event as a update message to all the followers of user id identified by from
+   */
+  private def sendUpdates(from: UserId, eventString: EventsString): Unit = {
+    for {
+      followers <- userFollowers.get(from)
+      follower <- followers
+      userConnections <- userConnections.get(follower)
+      uc <- userConnections
+    } {
+      uc ! eventString
     }
   }
 }
 
 object EventDistributor {
-
   case class UserClientConnected(id: UserId)
 }

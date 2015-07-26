@@ -17,7 +17,10 @@ class EventDistributorSpec extends AsyncActorSpec(ActorSystem("event-distributor
         mockUserConnectionHandler.send(eventDistributor, UserClientConnected(testUserId))
 
         // then
-        assert(eventDistributor.underlyingActor.userConnections.get(testUserId).contains(mockUserConnectionHandler.ref))
+        assert(eventDistributor.underlyingActor.userConnections.get(testUserId) match {
+          case Some(connections) => connections.contains(mockUserConnectionHandler.ref)
+          case None => false
+        })
       }
     }
 
@@ -38,12 +41,12 @@ class EventDistributorSpec extends AsyncActorSpec(ActorSystem("event-distributor
         // then
         eventDistributor ! followEventsAsString
         assert(eventDistributor.underlyingActor.userFollowers.get(testUserId2) match {
-          case Some(followers) => followers.contains(mockUserConnectionHandler1.ref)
+          case Some(followers) => followers.contains(testUserId1)
           case None => false
         })
         eventDistributor ! unFollowEventsAsString
         assert(eventDistributor.underlyingActor.userFollowers.get(testUserId2) match {
-          case Some(followers) => !followers.contains(mockUserConnectionHandler1.ref)
+          case Some(followers) => !followers.contains(testUserId1)
           case None => true
         })
       }
